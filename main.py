@@ -14,7 +14,6 @@ import pandas as pd
 import numpy as np
 
 def main():
-
     try:
         loaded = np.load("data\\stock_data_3d.npz", allow_pickle=True)
         data = loaded["data_3d"]
@@ -22,7 +21,12 @@ def main():
         trade_dates = pd.DatetimeIndex(loaded["dates"])
         feature_cols = loaded["feature_cols"].tolist()
     except:
-        data,stock_codes,trade_dates,feature_cols = prepare_data(STOCK_LIST=ZZ500_LIST)
+        try:
+            with open('API_key','r') as f:
+                api = f.readline()
+        except:
+            api = input('输入tushare_api=')
+        data,stock_codes,trade_dates,feature_cols = prepare_data(STOCK_LIST=ZZ500_LIST,API=api)
 
     # ---- 2. 构建原语集，设定因子可能含有的变量与运算符 ----
     pset = build_pset(feature_cols)

@@ -58,7 +58,7 @@ def get_data_tushare(STOCK_LIST,API,start_date,end_date):
 
     return stock_dict
 
-def prepare_data(STOCK_LIST):
+def prepare_data(STOCK_LIST,API):
     #调取数据
     data_dict = get_data_tushare(STOCK_LIST,API=API,start_date='20200101',end_date='20260531')
 
