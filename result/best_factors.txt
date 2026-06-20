@@ -1,19 +1,19 @@
 # GP Factor Discovery Results
-# Generations: 25 | Population: 150
+# Generations: 40 | Population: 500
 # FORWARD_RETURN: 5D | PARSIMONY_C: 0.0001
 
-Rank 1 | fitness=1.002416 | nodes=8 | height=3
-TSMAX(TSRANK(SMA(LOWER_SHADOW, 20, 240), 2), 20)
+Rank 1 | fitness=1.844325 | nodes=12 | height=4
+STD(NEQ(WMA(DECAYLINEAR(GAP, 230), 32), DBM(SIGN(RETURN), PRICE_POS)), 5)
 
-Rank 2 | fitness=1.002316 | nodes=9 | height=4
-TSMAX(TSRANK(SMA(SQUARE(LOWER_SHADOW), 20, 240), 2), 20)
+Rank 2 | fitness=1.844225 | nodes=13 | height=5
+STD(NEQ(WMA(DECAYLINEAR(GAP, 230), 32), DBM(SIGN(SIGN(RETURN)), PRICE_POS)), 5)
 
-Rank 3 | fitness=0.993529 | nodes=5 | height=2
-TSMAX(TSRANK(LOWER_SHADOW, 2), 20)
+Rank 3 | fitness=1.844025 | nodes=15 | height=5
+STD(NEQ(WMA(DECAYLINEAR(GAP, 230), 32), DBM(SIGN(RETURN), DBM(SIGN(RETURN), PRICE_POS))), 5)
 
-Rank 4 | fitness=0.993429 | nodes=6 | height=3
-TSMAX(TSRANK(LOG(LOWER_SHADOW), 2), 20)
+Rank 4 | fitness=1.843825 | nodes=17 | height=6
+STD(NEQ(WMA(DECAYLINEAR(GAP, 230), 32), DBM(SIGN(RETURN), DBM(SQUARE(POWER(PRICE_POS, 252)), PRICE_POS))), 5)
 
-Rank 5 | fitness=0.993329 | nodes=7 | height=3
-TSMAX(TSRANK(TSRANK(LOWER_SHADOW, 10), 2), 20)
+Rank 5 | fitness=1.843825 | nodes=17 | height=6
+STD(NEQ(WMA(DECAYLINEAR(GAP, 230), 32), DBM(SIGN(RETURN), DBM(SQUARE(POWER(PRICE_POS, 100)), PRICE_POS))), 5)
 

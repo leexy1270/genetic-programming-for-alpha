@@ -2,3 +2,5 @@ __pycache__/
 .claude
 .vscode
 API_key
+a.ipynb
+test.py

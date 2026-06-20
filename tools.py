@@ -29,27 +29,74 @@ def get_data_tdx(STOCK_LIST):
     return stock_dict
 
 def get_data_tushare(STOCK_LIST,API,start_date,end_date):
-    "通过tushare获取股票日度数据，带错误处理和进度条"
+    "通过tushare获取股票日度数据，带频率控制和失败重试"
     import tushare as ts
     import time
-    pro = ts.pro_api(API)
+    import os
+    import pickle
+
+    CACHE_FILE = "data/tushare_cache.pkl"
+
+    # 断点续传：加载已有缓存
     stock_dict = {}
     failed_list = []
-
-    pbar = tqdm(STOCK_LIST, desc="通过 Tushare 获取股票日线", unit='只')
-    for code in pbar:
+    if os.path.exists(CACHE_FILE):
         try:
-            data = pro.daily(ts_code=code, start_date=start_date, end_date=end_date)
-            if data is None or len(data) == 0:
-                failed_list.append(code)
-                pbar.set_postfix({'失败': len(failed_list)})
-                continue
-            stock_dict[code] = data
-        except Exception as e:
+            with open(CACHE_FILE, 'rb') as f:
+                cache = pickle.load(f)
+                stock_dict = cache.get('data', {})
+                failed_list = cache.get('failed', [])
+                print(f"[缓存] 已加载 {len(stock_dict)} 只成功 + {len(failed_list)} 只失败")
+        except Exception:
+            pass
+
+    # 过滤已获取的股票
+    remaining = [c for c in STOCK_LIST if c not in stock_dict and c not in failed_list]
+
+    pro = ts.pro_api(API)
+
+    def save_cache():
+        os.makedirs("data", exist_ok=True)
+        with open(CACHE_FILE, 'wb') as f:
+            pickle.dump({'data': stock_dict, 'failed': failed_list}, f)
+
+    pbar = tqdm(remaining, desc="通过 Tushare 获取股票日线", unit='只')
+    SLEEP_PER_CALL = 1.5   # 50次/分钟限制 → 1.2s间隔，用1.5s留余量
+    RETRY_SLEEP = 65        # 触发限频后等65秒重置计数器
+
+    for code in pbar:
+        success = False
+        for _ in range(3):  # 最多3次尝试
+            try:
+                data = pro.daily(ts_code=code, start_date=start_date, end_date=end_date)
+                if data is None or len(data) == 0:
+                    failed_list.append(code)
+                    pbar.set_postfix({'成功': len(stock_dict), '失败': len(failed_list)})
+                    success = True
+                    break
+                stock_dict[code] = data
+                pbar.set_postfix({'成功': len(stock_dict), '失败': len(failed_list)})
+                success = True
+                break
+            except Exception as e:
+                err_msg = str(e)
+                if '频率' in err_msg or '频次' in err_msg or 'frequency' in err_msg.lower():
+                    # 触发限频，等待计数器重置后重试
+                    pbar.set_postfix({'状态': '限频等待60s...'})
+                    time.sleep(RETRY_SLEEP)
+                else:
+                    # 其他错误（如网络抖动），短暂等待后重试
+                    time.sleep(3)
+        if not success:
             failed_list.append(code)
-            pbar.set_postfix({'失败': len(failed_list), '错误': str(e)[:20]})
-        pbar.set_postfix({'成功': len(stock_dict), '失败': len(failed_list)})
-        time.sleep(0.35)  # 避免触发 tushare 频率限制
+            pbar.set_postfix({'成功': len(stock_dict), '失败': len(failed_list)})
+
+        time.sleep(SLEEP_PER_CALL)
+        # 每 10 只存一次盘
+        if len(stock_dict) % 10 == 0:
+            save_cache()
+
+    save_cache()
 
     if failed_list:
         print(f'[WARNING] Data fetch failed ({len(failed_list)}/{len(STOCK_LIST)}): {failed_list}')
@@ -58,7 +105,7 @@ def get_data_tushare(STOCK_LIST,API,start_date,end_date):
 
     return stock_dict
 
-def prepare_data(STOCK_LIST,API):
+def prepare_data(STOCK_LIST,API,save=False):
     #调取数据
     data_dict = get_data_tushare(STOCK_LIST,API=API,start_date='20200101',end_date='20260531')
 
@@ -129,20 +176,45 @@ def prepare_data(STOCK_LIST,API):
     # 将每只股票的 DataFrame[feature_cols] 堆叠为 3D 数组
     data_3d = np.array([aligned_dict[code][feature_cols].values for code in stock_codes])
 
-    '''
+    if save:
     # ---- 7. 储存 3D 数组及元数据 ----
-    save_path = "stock_data_3d.npz"
-    np.savez_compressed(
-        save_path,
-        data_3d=data_3d,
-        stock_codes=np.array(stock_codes, dtype=str),
-        dates=dates.values.astype('datetime64[D]'),  # 转为 numpy 日期格式
-        feature_cols=np.array(feature_cols, dtype=str),
-    )
-    print(f"\n已保存至: {save_path}")
-    '''
+        save_path = "data\\stock_data_3d.npz"
+        np.savez_compressed(
+            save_path,
+            data_3d=data_3d,
+            stock_codes=np.array(stock_codes, dtype=str),
+            dates=dates.values.astype('datetime64[D]'),  # 转为 numpy 日期格式
+            feature_cols=np.array(feature_cols, dtype=str),
+        )
+        print(f"\n已保存至: {save_path}")
+    
 
     return data_3d, stock_codes, dates, feature_cols
+
+def check_pset(pset):
+    print("=" * 60)
+    print("Primitives:")
+    print("=" * 60)
+    for ret_type, prim_list in pset.primitives.items():
+        for prim in prim_list:
+            args_str = ", ".join(str(a) for a in prim.args)
+            print(f"  {prim.name}({args_str}) -> {ret_type.__name__}")
+
+def convert_code(code):
+    """
+    将6位数字股票代码转换为'代码.市场后缀'的格式
+    """
+    code_str = str(code).zfill(6)  # 确保代码是6位字符串，补齐前导零
+    # 根据首位数字判断市场后缀
+    if code_str.startswith('6'):
+        return f"{code_str}.SH"  # 沪市（上海）
+    elif code_str.startswith(('0', '3')):
+        return f"{code_str}.SZ"  # 深市（深圳，含创业板）
+    elif code_str.startswith(('8', '4')):
+        return f"{code_str}.BJ"  # 北交所
+    else:
+        # 可在此添加其他规则，或返回原代码
+        return code_str
 
 
 def analyze_hof(hof: list, pset: gp.PrimitiveSet, stock_data: dict):
