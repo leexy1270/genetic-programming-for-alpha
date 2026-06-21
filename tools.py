@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
@@ -352,3 +353,146 @@ def visualize_best_factor(hof_item, pset: gp.PrimitiveSet, stock_data: dict):
     print("[图] factor_quintile.png — 分组回测已保存")
 
     return group_stats
+
+
+# ============================================================
+# 期货数据获取与预处理
+# ============================================================
+
+def prepare_futures_data(symbols=None, start_date='20200101', end_date='20260531', save=True):
+    """
+    获取主流期货合约主导行情数据，清洗对齐后转为 3D numpy 数组。
+
+    与股票数据的区别:
+      - 无 VWAP/VWAP_DEV (期货没有均价)
+      - 新增 OPENINTEREST (持仓量) 和 OI_CHG (持仓变化率)
+      - 使用 akshare futures_main_sina 接口（免费无需 token）
+
+    Parameters
+    ----------
+    symbols : list of str  期货品种代码列表，如 ['CU','IF','RB']，默认使用 FUTURES_LIST
+    start_date : str
+    end_date : str
+    save : bool  是否保存为 npz 文件
+
+    Returns
+    -------
+    data_3d : np.ndarray  (n_contracts, n_dates, n_features)
+    contract_codes : list of str
+    trade_dates : pd.DatetimeIndex
+    feature_cols : list of str
+    """
+    import akshare as ak
+
+    if symbols is None:
+        from parameters import FUTURES_LIST
+        symbols = FUTURES_LIST
+
+    print(f"[期货] 获取 {len(symbols)} 个品种主导合约数据...")
+    contract_dict = {}
+    failed = []
+
+    for symbol in tqdm(symbols, desc="期货行情", unit='品种'):
+        try:
+            # futures_main_sina 获取主导合约（主力/次主力连续）
+            data = ak.futures_main_sina(
+                symbol=symbol + '0',
+                start_date=start_date,
+                end_date=end_date
+            )
+            if data is None or len(data) == 0:
+                failed.append(symbol)
+                continue
+
+            data = data.rename(columns={
+                '日期': 'date',
+                '开盘价': 'OPEN',
+                '最高价': 'HIGH',
+                '最低价': 'LOW',
+                '收盘价': 'CLOSE',
+                '成交量': 'VOLUME',
+                '持仓量': 'OPENINTEREST',
+                '动态结算价': 'DYNAMIC_PRICE',
+            })
+
+            data['date'] = pd.to_datetime(data['date'])
+            # 移除时区信息（不同品种可能有时区差异）
+            if data['date'].dt.tz is not None:
+                data['date'] = data['date'].dt.tz_localize(None)
+
+            data = data.drop_duplicates(subset=['date'])
+            data = data.set_index('date')
+            data = data.sort_index(ascending=True)
+
+            # ---- 计算衍生特征 ----
+            data['RETURN'] = data['CLOSE'].pct_change() * 100.0  # 日收益率 (%)
+
+            # 日内形态
+            vwap_proxy = (data['HIGH'] + data['LOW'] + data['CLOSE']) / 3.0
+            data['BODY'] = (data['CLOSE'] - data['OPEN']) / data['OPEN'].replace(0, np.nan)
+            data['UPPER_SHADOW'] = (data['HIGH'] - data[['OPEN', 'CLOSE']].max(axis=1)) / data['OPEN'].replace(0, np.nan)
+            data['LOWER_SHADOW'] = (data[['OPEN', 'CLOSE']].min(axis=1) - data['LOW']) / data['OPEN'].replace(0, np.nan)
+            data['PRICE_POS'] = (data['CLOSE'] - data['LOW']) / (data['HIGH'] - data['LOW']).replace(0, np.nan)
+            data['AMP'] = (data['HIGH'] - data['LOW']) / data['CLOSE'].shift(1).replace(0, np.nan)
+            data['GAP'] = data['OPEN'] / data['CLOSE'].shift(1).replace(0, np.nan) - 1.0
+
+            # 量仓
+            data['VOL_CHG'] = data['VOLUME'] / data['VOLUME'].shift(1).replace(0, np.nan)
+            data['OI_CHG'] = data['OPENINTEREST'] / data['OPENINTEREST'].shift(1).replace(0, np.nan)
+
+            # 保留 FUTURES_FEATURE_COLS 中的列
+            from parameters import FUTURES_FEATURE_COLS
+            keep_cols = [c for c in FUTURES_FEATURE_COLS if c in data.columns
+                         or c in ['RETURN', 'BODY', 'UPPER_SHADOW', 'LOWER_SHADOW',
+                                  'PRICE_POS', 'AMP', 'GAP', 'VOL_CHG', 'OI_CHG']]
+            data = data[[c for c in FUTURES_FEATURE_COLS if c in data.columns]]
+
+            contract_dict[symbol] = data
+        except Exception as e:
+            failed.append(symbol)
+            print(f"  [{symbol}] 获取失败: {e}")
+
+    if failed:
+        print(f"[期货] 获取失败 ({len(failed)}/{len(symbols)}): {failed}")
+    if not contract_dict:
+        raise RuntimeError("所有期货数据获取均失败")
+
+    # ---- 对齐日期 ----
+    all_dates = pd.DatetimeIndex([])
+    for df in contract_dict.values():
+        all_dates = all_dates.union(df.index)
+    all_dates = all_dates.sort_values(ascending=True)
+
+    aligned = {}
+    for code, df in contract_dict.items():
+        aligned[code] = df.reindex(all_dates)
+
+    contract_codes = list(aligned.keys())
+    dates = all_dates
+
+    # 确保所有列一致
+    sample_df = aligned[contract_codes[0]]
+    feature_cols = [c for c in sample_df.columns if c not in ['DYNAMIC_PRICE']]
+    feature_cols = [c for c in feature_cols if c in sample_df.columns]
+
+    # ---- 转 3D 数组 ----
+    data_3d = np.array([aligned[code][feature_cols].values for code in contract_codes],
+                       dtype=np.float64)
+
+    n_nan = np.isnan(data_3d).sum()
+    print(f"[期货] 3D 数组: {data_3d.shape} | NaN 占比: {n_nan/data_3d.size:.1%}")
+    print(f"[期货] 日期范围: {dates[0].date()} ~ {dates[-1].date()}")
+
+    if save:
+        os.makedirs("data", exist_ok=True)
+        save_path = "data/futures_data_3d.npz"
+        np.savez_compressed(
+            save_path,
+            data_3d=data_3d,
+            contract_codes=np.array(contract_codes, dtype=str),
+            dates=dates.values.astype('datetime64[D]'),
+            feature_cols=np.array(feature_cols, dtype=str),
+        )
+        print(f"[期货] 已保存: {save_path}")
+
+    return data_3d, contract_codes, dates, feature_cols

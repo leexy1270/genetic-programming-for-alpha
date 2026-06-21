@@ -1,0 +1,90 @@
+# ============================================================
+# 热启动因子表达式文件
+# 用法: 每行一个 DEAP 格式表达式, # 开头为注释
+# ============================================================
+
+# ===== 1. 动量因子 (累计收益率) =====
+mom_5d = SUM(RETURN, 5)
+mom_10d = SUM(RETURN, 10)
+mom_20d = SUM(RETURN, 20)
+mom_60d = SUM(RETURN, 60)
+
+# ===== 2. RSI风格: 累计涨跌 / 涨跌绝对值之和 =====
+rsi_5d = DIV(SUM(RETURN, 5), SUM(ABS(RETURN), 5))
+rsi_10d = DIV(SUM(RETURN, 10), SUM(ABS(RETURN), 10))
+rsi_20d = DIV(SUM(RETURN, 20), SUM(ABS(RETURN), 20))
+
+# ===== 3. 收盘价/历史最高 - 1 (等价: (CLOSE-MAX)/MAX) =====
+close_max_5d = DIV(SUB(CLOSE, TSMAX(CLOSE, 5)), TSMAX(CLOSE, 5))
+close_max_20d = DIV(SUB(CLOSE, TSMAX(CLOSE, 20)), TSMAX(CLOSE, 20))
+close_max_60d = DIV(SUB(CLOSE, TSMAX(CLOSE, 60)), TSMAX(CLOSE, 60))
+
+# ===== 4. 隔夜收益率之和 (GAP = OPEN/CLOSE[-1] - 1) =====
+overnight_5d = SUM(GAP, 5)
+overnight_10d = SUM(GAP, 10)
+overnight_20d = SUM(GAP, 20)
+
+# ===== 5. N日均线 / 收盘价 =====
+ma_div_c_5d = DIV(MEAN(CLOSE, 5), CLOSE)
+ma_div_c_20d = DIV(MEAN(CLOSE, 20), CLOSE)
+ma_div_c_60d = DIV(MEAN(CLOSE, 60), CLOSE)
+
+# ===== 6. 价格分位数 (0~1, 当前价在历史中的位置) =====
+price_pct_20d = TSRANK(CLOSE, 20)
+price_pct_60d = TSRANK(CLOSE, 60)
+price_pct_120d = TSRANK(CLOSE, 120)
+
+# ===== 7. -ts_rank(rank(LOW), N) =====
+wq1_20d = NEG(TSRANK(CS_RANK(LOW), 20))
+wq1_60d = NEG(TSRANK(CS_RANK(LOW), 60))
+
+# ===== 8. -correlation(OPEN, VOLUME, N) =====
+wq2_10d = NEG(CORR(OPEN, VOLUME, 10))
+wq2_20d = NEG(CORR(OPEN, VOLUME, 20))
+wq2_60d = NEG(CORR(OPEN, VOLUME, 60))
+
+# ===== 9. -correlation(rank(OPEN), rank(VOLUME), N) =====
+wq3_10d = NEG(CORR(CS_RANK(OPEN), CS_RANK(VOLUME), 10))
+wq3_20d = NEG(CORR(CS_RANK(OPEN), CS_RANK(VOLUME), 20))
+wq3_60d = NEG(CORR(CS_RANK(OPEN), CS_RANK(VOLUME), 60))
+
+# ===== 10. -rank(covariance(rank(CLOSE), rank(VOLUME), N)) =====
+wq4_10d = NEG(CS_RANK(COVIANCE(CS_RANK(CLOSE), CS_RANK(VOLUME), 10)))
+wq4_20d = NEG(CS_RANK(COVIANCE(CS_RANK(CLOSE), CS_RANK(VOLUME), 20)))
+wq4_60d = NEG(CS_RANK(COVIANCE(CS_RANK(CLOSE), CS_RANK(VOLUME), 60)))
+
+# ===== 11. -rank(covariance(rank(HIGH), rank(VOLUME), N)) =====
+wq5_10d = NEG(CS_RANK(COVIANCE(CS_RANK(HIGH), CS_RANK(VOLUME), 10)))
+wq5_20d = NEG(CS_RANK(COVIANCE(CS_RANK(HIGH), CS_RANK(VOLUME), 20)))
+wq5_60d = NEG(CS_RANK(COVIANCE(CS_RANK(HIGH), CS_RANK(VOLUME), 60)))
+
+# ===== 12. -sum(rank(corr(rank(HIGH), rank(VOL), N)), N) =====
+wq6_10d = NEG(SUM(CS_RANK(CORR(CS_RANK(HIGH), CS_RANK(VOLUME), 10)), 10))
+wq6_20d = NEG(SUM(CS_RANK(CORR(CS_RANK(HIGH), CS_RANK(VOLUME), 20)), 20))
+
+# ===== 13. 高价振幅: DECAYLINEAR筛选高位日的AMP均值 =====
+high_amp_20d = MEAN(DECAYLINEAR(AMP, 20), 20)
+high_amp_60d = MEAN(DECAYLINEAR(AMP, 60), 60)
+
+# ===== 14. 低价振幅: 反向权重 =====
+low_amp_20d = MEAN(DECAYLINEAR(NEG(AMP), 20), 20)
+
+# ===== 15. 理想振幅差 (高价AMP - 低价AMP) =====
+amp_spread_20d = SUB(MEAN(DECAYLINEAR(AMP, 20), 20), MEAN(DECAYLINEAR(NEG(AMP), 20), 20))
+
+# ===== 16. 115日收益 - 5日收益 =====
+ret_spread = SUB(SUM(RETURN, 115), SUM(RETURN, 5))
+
+# ===== 17. SUM(ln(High/Low)^2, N) — 波动率代理 (分子部分, 分母为常数无法表达) =====
+park_vol_20d = SUM(SQUARE(LOG(DIV(HIGH, LOW))), 20)
+park_vol_60d = SUM(SQUARE(LOG(DIV(HIGH, LOW))), 60)
+
+# ===== 18. Rogers-Satchell波动率: sqrt(sum(ln(H/C)*ln(L/C)+ln(L/O)*ln(L/O), N)) =====
+rs_vol_20d = SQRT(SUM(ADD(MUL(LOG(DIV(HIGH, CLOSE)), LOG(DIV(LOW, CLOSE))), MUL(LOG(DIV(LOW, OPEN)), LOG(DIV(LOW, OPEN)))), 20))
+rs_vol_60d = SQRT(SUM(ADD(MUL(LOG(DIV(HIGH, CLOSE)), LOG(DIV(LOW, CLOSE))), MUL(LOG(DIV(LOW, OPEN)), LOG(DIV(LOW, OPEN)))), 60))
+
+# ===== 19. 复合波动率: 隔夜 + 日内 + Rogers-Satchell =====
+# 隔夜波: STD(LOG(OPEN/CLOSE[-1]), 20)
+# 日内波: STD(LOG(HIGH/LOW), 20)
+# RS波: SQRT(SUM(H*L项, 20))
+composite_vol = ADD(ADD(STD(LOG(DIV(OPEN, DELAY(CLOSE, 1))), 20), STD(LOG(DIV(HIGH, LOW)), 20)), SQRT(SUM(ADD(MUL(LOG(DIV(HIGH, CLOSE)), LOG(DIV(LOW, CLOSE))), MUL(LOG(DIV(LOW, OPEN)), LOG(DIV(LOW, OPEN)))), 20)))

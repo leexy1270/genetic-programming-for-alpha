@@ -1,3 +1,7 @@
+"""
+build_pset.py — 遗传编程原语集
+"""
+
 from deap import gp
 import numpy as np
 import random
@@ -5,64 +9,216 @@ from functools import partial
 
 
 def build_pset(INPUT_COLS) -> gp.PrimitiveSet:
-    pset = gp.PrimitiveSetTyped("MAIN", [np.ndarray]*len(INPUT_COLS),np.ndarray)
-    # 不显式设置 pset.context["__builtins__"]，因为 module 对象无法被 pickle
-    # Python 的 eval() 在 globals 缺少 __builtins__ 时会自动继承调用者的内置空间
-    # _cached_compile 中会确保编译前 __builtins__ 就位
+    """
+    构建类型化原语集。
 
+    所有数据算子输入/输出类型均为 np.ndarray (float64),
+    窗口参数类型为 int, 标量常数为 float。
+    """
+    pset = gp.PrimitiveSetTyped("MAIN", [np.ndarray] * len(INPUT_COLS), np.ndarray)
+
+    # 将 ARG0, ARG1, ... 重命名为特征列名
     for i, col_name in enumerate(INPUT_COLS):
         pset.renameArguments(**{f"ARG{i}": col_name})
 
-    #1. ---------------- 常数 ---------------
-    pset.addEphemeralConstant("rand", partial(random.uniform, -1, 1),float)
-    pset.addEphemeralConstant('window',partial(random.randint,1,252),int)
+    # ================================================================
+    # 1. 常数
+    # ================================================================
+    # 随机浮点常数 (uniform -1 ~ 1) — GP 进化时随机采样
+    pset.addEphemeralConstant("rand", partial(random.uniform, -1, 1), float)
 
-    # 固定窗口常数 → terminals[int]
-    for n in [1,2,3,4,5,6,7,8,9,10,12,13,14,15,16,17,18,20,21,24,26,30,32,37,40,50,60,80,100,120,150,180,200,230,240,250,252]:
+    # 随机窗口参数 — GP 进化时从池中随机选取
+    _WINDOW_POOL = [
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+        12, 14, 15, 16, 18, 20, 21, 24, 26, 30,
+        32, 37, 40, 50, 60, 80, 100, 120, 150, 180,
+        200, 230, 240, 250, 252,
+    ]
+    pset.addEphemeralConstant("window", partial(random.choice, _WINDOW_POOL), int)
+
+    # 固定窗口终端 — 支持从字符串解析表达式 (warm_start.txt / --expr)
+    # 必须与 _WINDOW_POOL 一致，确保解析后的表达式在 GP 中可正常交叉/变异
+    for n in _WINDOW_POOL:
         pset.addTerminal(n, int)
 
-    pset.addTerminal(0.5, float)
-    pset.addTerminal(0.618, float)
-    pset.addTerminal(-1.0, float)
-    pset.addTerminal(0.0, float)
-    pset.addTerminal(1.0, float)
-    pset.addTerminal(100.0, float)
+    # 固定标量常数
+    for val in [0.0, 1.0, -1.0, 0.5, 100.0]:
+        pset.addTerminal(val, float)
 
-    #2. =================================== 基本算子 ====================================
-    pset.addPrimitive(np.abs, [np.ndarray], np.ndarray, name="ABS")
-
-    def safe_sqrt(a: np.ndarray) -> np.ndarray:
-        return np.sqrt(np.maximum(a, 0))
-    pset.addPrimitive(safe_sqrt, [np.ndarray], np.ndarray, name="SQRT")
-
-    def safe_log(a: np.ndarray) -> np.ndarray:
-        return np.log(np.maximum(a, 1e-8))
-
-    pset.addPrimitive(safe_log, [np.ndarray], np.ndarray, name="LOG")
-
-    pset.addPrimitive(np.sign, [np.ndarray], np.ndarray, name="SIGN")
-
-    pset.addPrimitive(np.square, [np.ndarray], np.ndarray, name="SQUARE")
-
-    pset.addPrimitive(np.add, [np.ndarray, np.ndarray], np.ndarray, name="ADD")
-
-    pset.addPrimitive(np.subtract, [np.ndarray, np.ndarray], np.ndarray, name="SUB")
-
-    pset.addPrimitive(np.multiply, [np.ndarray, np.ndarray], np.ndarray, name="MUL")
+    # ================================================================
+    # 2. 基本算术算子 (9)
+    # ================================================================
 
     def safe_div(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+        """保护除法: |b| < 1e-8 → 0"""
         with np.errstate(divide="ignore", invalid="ignore"):
             return np.where(np.abs(b) > 1e-8, a / b, 0.0)
+
+    def safe_sqrt(a: np.ndarray) -> np.ndarray:
+        """保护平方根: 负数 → 0"""
+        return np.sqrt(np.maximum(a, 0))
+
+    def safe_log(a: np.ndarray) -> np.ndarray:
+        """保护对数: < 1e-8 → 0"""
+        return np.log(np.maximum(a, 1e-8))
+
+    pset.addPrimitive(np.add, [np.ndarray, np.ndarray], np.ndarray, name="ADD")
+    pset.addPrimitive(np.subtract, [np.ndarray, np.ndarray], np.ndarray, name="SUB")
+    pset.addPrimitive(np.multiply, [np.ndarray, np.ndarray], np.ndarray, name="MUL")
     pset.addPrimitive(safe_div, [np.ndarray, np.ndarray], np.ndarray, name="DIV")
+    pset.addPrimitive(np.negative, [np.ndarray], np.ndarray, name="NEG")
+    pset.addPrimitive(np.abs, [np.ndarray], np.ndarray, name="ABS")
+    pset.addPrimitive(safe_sqrt, [np.ndarray], np.ndarray, name="SQRT")
+    pset.addPrimitive(np.square, [np.ndarray], np.ndarray, name="SQUARE")
+    pset.addPrimitive(safe_log, [np.ndarray], np.ndarray, name="LOG")
 
-    pset.addPrimitive(np.maximum, [np.ndarray, np.ndarray], np.ndarray, name="MAX2")
-    pset.addPrimitive(np.minimum, [np.ndarray, np.ndarray], np.ndarray, name="MIN2")
+    # ================================================================
+    # 3. 时序滚动算子 (14, 均需要 window:int 参数)
+    #    这些是 alpha 因子的核心 — WQ101 中 80%+ 的因子依赖它们
+    # ================================================================
 
+    def ts_delta(arr: np.ndarray, window: int) -> np.ndarray:
+        """arr[t] - arr[t-window]"""
+        out = np.full(arr.shape, np.nan, dtype=np.float64)
+        out[:, window:] = arr[:, window:] - arr[:, :-window]
+        return out
 
-    #3. ================================== 截面算子 =================================
-    # 截面排名：每天将所有股票在该因子上的值转为 0~1 分位数
+    def ts_delay(arr: np.ndarray, window: int) -> np.ndarray:
+        """arr[t-window]"""
+        out = np.full(arr.shape, np.nan, dtype=np.float64)
+        out[:, window:] = arr[:, :-window]
+        return out
+
+    def ts_sum(arr: np.ndarray, window: int) -> np.ndarray:
+        """滚动求和"""
+        n = arr.shape[1]
+        out = np.full(arr.shape, np.nan, dtype=np.float64)
+        if n <= window or window <= 0:
+            return out
+        cum = np.nancumsum(arr, axis=1)
+        out[:, window:] = cum[:, window:] - cum[:, :-window]
+        return out
+
+    def ts_mean(arr: np.ndarray, window: int) -> np.ndarray:
+        """滚动均值"""
+        return ts_sum(arr, window) / window
+
+    def ts_std(arr: np.ndarray, window: int) -> np.ndarray:
+        """滚动标准差"""
+        n = arr.shape[1]
+        out = np.full(arr.shape, np.nan, dtype=np.float64)
+        if n <= window or window <= 0:
+            return out
+        cum = np.nancumsum(arr, axis=1)
+        cum2 = np.nancumsum(arr * arr, axis=1)
+        sum_x = cum[:, window:] - cum[:, :-window]
+        sum_x2 = cum2[:, window:] - cum2[:, :-window]
+        var = sum_x2 / window - (sum_x / window) ** 2
+        out[:, window:] = np.sqrt(np.maximum(var, 0))
+        return out
+
+    def ts_min(arr: np.ndarray, window: int) -> np.ndarray:
+        """滚动最小值"""
+        n = arr.shape[1]
+        out = np.full(arr.shape, np.nan, dtype=np.float64)
+        if n < window or window <= 0:
+            return out
+        win = np.lib.stride_tricks.sliding_window_view(arr, window, axis=1)
+        out[:, window - 1:] = win.min(axis=-1)
+        return out
+
+    def ts_max(arr: np.ndarray, window: int) -> np.ndarray:
+        """滚动最大值"""
+        n = arr.shape[1]
+        out = np.full(arr.shape, np.nan, dtype=np.float64)
+        if n < window or window <= 0:
+            return out
+        win = np.lib.stride_tricks.sliding_window_view(arr, window, axis=1)
+        out[:, window - 1:] = win.max(axis=-1)
+        return out
+
+    def ts_rank(arr: np.ndarray, window: int) -> np.ndarray:
+        """滚动排名分位数 (0~1)"""
+        n = arr.shape[1]
+        out = np.full(arr.shape, np.nan, dtype=np.float64)
+        if n < window or window <= 1:
+            return out
+        # 移动最后一维到末尾方便 sliding_window_view
+        arr_moved = np.moveaxis(arr, 1, -1)
+        out_moved = np.moveaxis(out, 1, -1)
+        win = np.lib.stride_tricks.sliding_window_view(arr_moved, window, axis=-1)
+        last = win[..., -1:]
+        rank_count = (win < last).sum(axis=-1)
+        out_moved[..., window - 1:] = rank_count / (window - 1)
+        return np.moveaxis(out_moved, -1, 1)
+
+    def ts_roc(arr: np.ndarray, window: int) -> np.ndarray:
+        """变化率: arr[t] / arr[t-window] - 1"""
+        n = arr.shape[1]
+        out = np.full(arr.shape, np.nan, dtype=np.float64)
+        if n <= window or window <= 0:
+            return out
+        with np.errstate(divide="ignore", invalid="ignore"):
+            out[:, window:] = arr[:, window:] / np.maximum(np.abs(arr[:, :-window]), 1e-8) - 1.0
+        return out
+
+    # ZSCORE 已移除 — 等价于 DIV(SUB(x, MEAN(x,N)), STD(x,N)), 让GP自行组合
+    # def ts_zscore(arr, window): ...
+
+    def ts_decay_linear(arr: np.ndarray, window: int) -> np.ndarray:
+        """线性衰减加权移动平均 (权重 1,2,...,window)"""
+        n = arr.shape[1]
+        out = np.full(arr.shape, np.nan, dtype=np.float64)
+        if n < window or window <= 0:
+            return out
+        weights = np.arange(1, window + 1, dtype=np.float64)
+        weights /= weights.sum()
+        win = np.lib.stride_tricks.sliding_window_view(arr, window, axis=1)
+        out[:, window - 1:] = np.tensordot(win, weights, axes=([-1], [0]))
+        return out
+
+    def ts_wma(arr: np.ndarray, window: int) -> np.ndarray:
+        """加权移动平均 (同 DECAYLINEAR, 别名保留兼容性)"""
+        return ts_decay_linear(arr, window)
+
+    def ts_prod(arr: np.ndarray, window: int) -> np.ndarray:
+        """滚动乘积 (对数空间计算避免溢出)"""
+        n = arr.shape[1]
+        out = np.full(arr.shape, np.nan, dtype=np.float64)
+        if n < window or window <= 0:
+            return out
+        log_arr = np.log(np.maximum(np.abs(arr), 1e-12))
+        s = np.nancumsum(log_arr, axis=1)
+        out[:, window:] = np.exp(s[:, window:] - s[:, :-window])
+        return out
+
+    def ts_cumsum(arr: np.ndarray) -> np.ndarray:
+        """累计求和 (无窗口参数)"""
+        return np.cumsum(np.nan_to_num(arr, nan=0.0), axis=1)
+
+    # 注册时序滚动算子
+    pset.addPrimitive(ts_delta, [np.ndarray, int], np.ndarray, name="DELTA")
+    pset.addPrimitive(ts_delay, [np.ndarray, int], np.ndarray, name="DELAY")
+    pset.addPrimitive(ts_sum, [np.ndarray, int], np.ndarray, name="SUM")
+    pset.addPrimitive(ts_mean, [np.ndarray, int], np.ndarray, name="MEAN")
+    pset.addPrimitive(ts_std, [np.ndarray, int], np.ndarray, name="STD")
+    pset.addPrimitive(ts_min, [np.ndarray, int], np.ndarray, name="TSMIN")
+    pset.addPrimitive(ts_max, [np.ndarray, int], np.ndarray, name="TSMAX")
+    pset.addPrimitive(ts_rank, [np.ndarray, int], np.ndarray, name="TSRANK")
+    pset.addPrimitive(ts_roc, [np.ndarray, int], np.ndarray, name="ROC")
+    # pset.addPrimitive(ts_zscore, [np.ndarray, int], np.ndarray, name="ZSCORE")
+    pset.addPrimitive(ts_decay_linear, [np.ndarray, int], np.ndarray, name="DECAYLINEAR")
+    pset.addPrimitive(ts_wma, [np.ndarray, int], np.ndarray, name="WMA")
+    pset.addPrimitive(ts_prod, [np.ndarray, int], np.ndarray, name="PROD")
+    pset.addPrimitive(ts_cumsum, [np.ndarray], np.ndarray, name="SUMAC")
+
+    # ================================================================
+    # 4. 截面算子 (3)
+    #    跨品种/股票同步计算, 是 alpha 另一核心维度
+    # ================================================================
+
     def cs_rank(arr: np.ndarray) -> np.ndarray:
-        """cross-sectional rank (0~1), ignores NaN/Inf"""
+        """截面排名 (0~1 分位数, 逐日计算)"""
         out = np.full(arr.shape, np.nan, dtype=np.float64)
         for t in range(arr.shape[1]):
             cross = arr[:, t]
@@ -70,17 +226,14 @@ def build_pset(INPUT_COLS) -> gp.PrimitiveSet:
             n = mask.sum()
             if n < 2:
                 continue
-            # argsort twice = rankdata("average"), fully vectorized
             order = np.argsort(cross[mask])
             ranks = np.empty(n, dtype=np.float64)
             ranks[order] = np.arange(1, n + 1, dtype=np.float64)
             out[mask, t] = ranks / n
         return out
-    pset.addPrimitive(cs_rank, [np.ndarray], np.ndarray, name="CS_RANK")
 
-    # 截面标准化：每天 z-score (axis=0)
     def cs_zscore(arr: np.ndarray) -> np.ndarray:
-        """cross-sectional z-score, ignores NaN/Inf"""
+        """截面标准化 (逐日 Z-Score)"""
         out = np.full(arr.shape, np.nan, dtype=np.float64)
         for t in range(arr.shape[1]):
             cross = arr[:, t]
@@ -94,187 +247,33 @@ def build_pset(INPUT_COLS) -> gp.PrimitiveSet:
             else:
                 out[mask, t] = (vals - mu) / sigma
         return out
+
+    def cs_scale(arr: np.ndarray) -> np.ndarray:
+        """截面缩放到单位总和 (逐日 sum(abs(x)) = 1)"""
+        out = np.full(arr.shape, np.nan, dtype=np.float64)
+        for t in range(arr.shape[1]):
+            cross = arr[:, t]
+            mask = ~(np.isnan(cross) | np.isinf(cross))
+            if mask.sum() < 2:
+                continue
+            abs_sum = np.abs(cross[mask]).sum()
+            if abs_sum > 1e-12:
+                out[mask, t] = cross[mask] / abs_sum
+            else:
+                out[mask, t] = 0.0
+        return out
+
+    pset.addPrimitive(cs_rank, [np.ndarray], np.ndarray, name="CS_RANK")
     pset.addPrimitive(cs_zscore, [np.ndarray], np.ndarray, name="CS_ZSCORE")
+    pset.addPrimitive(cs_scale, [np.ndarray], np.ndarray, name="CS_SCALE")
 
-    #4. =================================== 二元时序算子 ==============================
-    def ts_delta(arr: np.ndarray, window: int) -> np.ndarray:
-        """arr[t] - arr[t-window]  |  O(1)"""
-        out = np.full(arr.shape, np.nan, dtype=np.float64)
-        idx = [slice(None)] * arr.ndim
-        idx[1] = slice(window,None)
-        idx_prev = [slice(None)] * arr.ndim
-        idx_prev[1] = slice(None,-window)
-        out[tuple(idx)] = arr[tuple(idx)] - arr[tuple(idx_prev)]
-        return out
-    pset.addPrimitive(ts_delta,[np.ndarray,int],np.ndarray,name="DELTA")
+    # ================================================================
+    # 5. 配对/回归算子 (4)
+    #    两个序列的滚动统计关系, WQ101 中特征性使用
+    # ================================================================
 
-    def ts_delay(arr:np.ndarray,window:int) ->np.ndarray:
-        """arr[t-window]  |  O(1)"""
-        out = np.full(arr.shape, np.nan, dtype=np.float64)
-        idx = [slice(None)] * arr.ndim
-        idx_prev = [slice(None)] * arr.ndim
-        idx[1] = slice(window, None)
-        idx_prev[1] = slice(None, -window)
-        out[tuple(idx)] = arr[tuple(idx_prev)]
-        return out
-    pset.addPrimitive(ts_delay,[np.ndarray,int],np.ndarray,name="DELAY")
-
-    def ts_sum(arr:np.ndarray,window:int) ->np.ndarray:
-        n = arr.shape[1]
-        out = np.full(arr.shape, np.nan, dtype=np.float64)
-        if n <= window or window <= 0:
-            return out
-        cum = np.cumsum(arr, axis=1)
-        idx_hi = [slice(None)] * arr.ndim
-        idx_lo = [slice(None)] * arr.ndim
-        idx_hi[1] = slice(window, None)
-        idx_lo[1] = slice(None, -window)
-        out[tuple(idx_hi)] = cum[tuple(idx_hi)] - cum[tuple(idx_lo)]
-        return out
-    pset.addPrimitive(ts_sum,[np.ndarray,int],np.ndarray,name="SUM")
-
-    def ts_mean(arr:np.ndarray,window:int) ->np.ndarray:
-        n = arr.shape[1]
-        out = np.full(arr.shape, np.nan, dtype=np.float64)
-        if n <= window or window <= 0:
-            return out
-        cum = np.cumsum(arr, axis=1)
-        idx_hi = [slice(None)] * arr.ndim
-        idx_lo = [slice(None)] * arr.ndim
-        idx_hi[1] = slice(window, None)
-        idx_lo[1] = slice(None, -window)
-        out[tuple(idx_hi)] = (cum[tuple(idx_hi)] - cum[tuple(idx_lo)]) / window
-        return out
-    pset.addPrimitive(ts_mean,[np.ndarray,int],np.ndarray,name="MEAN")
-
-    def ts_std(arr:np.ndarray,window:int) ->np.ndarray:
-        n = arr.shape[1]
-        out = np.full(arr.shape, np.nan, dtype=np.float64)
-        if n <= window or window <= 0:
-            return out
-        cum = np.cumsum(arr, axis=1)
-        cum2 = np.cumsum(arr * arr, axis=1)
-        idx_hi = [slice(None)] * arr.ndim
-        idx_lo = [slice(None)] * arr.ndim
-        idx_hi[1] = slice(window, None)
-        idx_lo[1] = slice(None, -window)
-        sum_x = cum[tuple(idx_hi)] - cum[tuple(idx_lo)]
-        sum_x2 = cum2[tuple(idx_hi)] - cum2[tuple(idx_lo)]
-        var = sum_x2 / window - (sum_x / window) ** 2
-        out[tuple(idx_hi)] = np.sqrt(np.maximum(var, 0))
-        return out
-    pset.addPrimitive(ts_std,[np.ndarray,int],np.ndarray,name = "STD")
-
-    def ts_min(arr:np.ndarray,window:int) ->np.ndarray:
-        n = arr.shape[1]
-        out = np.full(arr.shape, np.nan, dtype=np.float64)
-        if n < window or window <= 0:
-            return out
-        win = np.lib.stride_tricks.sliding_window_view(arr, window, axis=1)
-        out_slice = [slice(None)] * arr.ndim
-        out_slice[1] = slice(window - 1, None)
-        out[tuple(out_slice)] = win.min(axis=-1)
-        return out
-    pset.addPrimitive(ts_min,[np.ndarray,int],np.ndarray,name="TSMIN")
-
-    def ts_max(arr:np.ndarray,window:int) ->np.ndarray:
-        n = arr.shape[1]
-        out = np.full(arr.shape, np.nan, dtype=np.float64)
-        if n < window or window <= 0:
-            return out
-        win = np.lib.stride_tricks.sliding_window_view(arr, window, axis=1)
-        out_slice = [slice(None)] * arr.ndim
-        out_slice[1] = slice(window - 1, None)
-        out[tuple(out_slice)] = win.max(axis=-1)
-        return out
-    pset.addPrimitive(ts_max,[np.ndarray,int],np.ndarray,"TSMAX")
-
-    def ts_rank(arr:np.ndarray,window:int) ->np.ndarray:
-        n = arr.shape[1]
-        out = np.full(arr.shape, np.nan, dtype=np.float64)
-        if n < window or window <= 1:
-            return out
-        # 移动目标轴到最后，方便处理
-        moved = 1 != -1 and 1 != arr.ndim - 1
-        if moved:
-            arr = np.moveaxis(arr, 1, -1)
-            out = np.moveaxis(out, 1, -1)   # out 也要同步移动!
-        # arr shape: (..., n)
-        # sliding_window_view 沿最后一维 → (..., n-w+1, w)
-        win = np.lib.stride_tricks.sliding_window_view(arr, window, axis=-1)
-        # win shape: (..., n-w+1, w)
-        # 排名分位数 = (比最后一个元素小的个数) / (w-1)
-        last = win[..., -1:]          # (..., n-w+1, 1)
-        rank_count = (win < last).sum(axis=-1)  # (..., n-w+1)
-        rank_pct = rank_count / (window - 1)
-        out_slice = [slice(None)] * arr.ndim
-        out_slice[-1] = slice(window - 1, None)
-        out[tuple(out_slice)] = rank_pct
-        if moved:
-            out = np.moveaxis(out, -1, 1)
-        return out
-    pset.addPrimitive(ts_rank,[np.ndarray,int],np.ndarray,name='TSRANK')
-
-    #5. --------------- 高级二元时序算子 (np.ndarray, int → np.ndarray) ---------------
-    # ts_roc: rate of change = arr[t] / arr[t-window] - 1
-    def ts_roc(arr: np.ndarray, window: int) -> np.ndarray:
-        n = arr.shape[1]
-        out = np.full(arr.shape, np.nan, dtype=np.float64)
-        if n <= window or window <= 0:
-            return out
-        idx = [slice(None)] * arr.ndim
-        idx_prev = [slice(None)] * arr.ndim
-        idx[1] = slice(window, None)
-        idx_prev[1] = slice(None, -window)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            out[tuple(idx)] = (
-                arr[tuple(idx)] / np.maximum(np.abs(arr[tuple(idx_prev)]), 1e-8) - 1.0
-            )
-        return out
-    pset.addPrimitive(ts_roc, [np.ndarray, int], np.ndarray, name="ROC")
-
-    # ts_zscore: rolling z-score
-    def ts_zscore(arr: np.ndarray, window: int) -> np.ndarray:
-        n = arr.shape[1]
-        out = np.full(arr.shape, np.nan, dtype=np.float64)
-        if n < window or window <= 0:
-            return out
-        cum = np.cumsum(arr, axis=1)
-        cum2 = np.cumsum(arr * arr, axis=1)
-        idx_hi = [slice(None)] * arr.ndim
-        idx_lo = [slice(None)] * arr.ndim
-        idx_hi[1] = slice(window, None)
-        idx_lo[1] = slice(None, -window)
-        sum_x = cum[tuple(idx_hi)] - cum[tuple(idx_lo)]
-        sum_x2 = cum2[tuple(idx_hi)] - cum2[tuple(idx_lo)]
-        mean = sum_x / window
-        var = sum_x2 / window - mean ** 2
-        std = np.sqrt(np.maximum(var, 0))
-        arr_cur = arr[tuple(idx_hi)]
-        with np.errstate(divide="ignore", invalid="ignore"):
-            out[tuple(idx_hi)] = np.where(std > 1e-8, (arr_cur - mean) / std, 0.0)
-        return out
-    pset.addPrimitive(ts_zscore, [np.ndarray, int], np.ndarray, name="ZSCORE")
-
-    # ts_decay_linear: linearly decaying weighted moving average
-    # 权重 = [1, 2, 3, ..., window] / sum(1..window)
-    def ts_decay_linear(arr: np.ndarray, window: int) -> np.ndarray:
-        n = arr.shape[1]
-        out = np.full(arr.shape, np.nan, dtype=np.float64)
-        if n < window or window <= 0:
-            return out
-        weights = np.arange(1, window + 1, dtype=np.float64)
-        weights /= weights.sum()
-        win = np.lib.stride_tricks.sliding_window_view(arr, window, axis=1)
-        out_slice = [slice(None)] * arr.ndim
-        out_slice[1] = slice(window - 1, None)
-        out[tuple(out_slice)] = np.tensordot(win, weights, axes=([-1], [0]))
-        return out
-    pset.addPrimitive(ts_decay_linear, [np.ndarray, int], np.ndarray, name="DECAYLINEAR")
-
-    #6. --------------- 三元算子 ---------------
-    # ts_corr: rolling Pearson correlation between two arrays
     def ts_corr(a: np.ndarray, b: np.ndarray, window: int) -> np.ndarray:
+        """滚动 Pearson 相关系数"""
         n = a.shape[1]
         out = np.full(a.shape, np.nan, dtype=np.float64)
         if n < window or window <= 0:
@@ -286,15 +285,11 @@ def build_pset(INPUT_COLS) -> gp.PrimitiveSet:
         num = (am * bm).sum(axis=-1)
         den = np.sqrt((am * am).sum(axis=-1) * (bm * bm).sum(axis=-1))
         with np.errstate(divide="ignore", invalid="ignore"):
-            corr = np.where(np.abs(den) > 1e-8, num / den, 0.0)
-        out_slice = [slice(None)] * a.ndim
-        out_slice[1] = slice(window - 1, None)
-        out[tuple(out_slice)] = corr
+            out[:, window - 1:] = np.where(np.abs(den) > 1e-8, num / den, 0.0)
         return out
-    pset.addPrimitive(ts_corr, [np.ndarray, np.ndarray, int], np.ndarray, name="CORR")
 
-    # ts_cov: rolling covariance between two arrays
     def ts_cov(a: np.ndarray, b: np.ndarray, window: int) -> np.ndarray:
+        """滚动协方差"""
         n = a.shape[1]
         out = np.full(a.shape, np.nan, dtype=np.float64)
         if n < window or window <= 1:
@@ -303,15 +298,105 @@ def build_pset(INPUT_COLS) -> gp.PrimitiveSet:
         bw = np.lib.stride_tricks.sliding_window_view(b, window, axis=1)
         am = aw - aw.mean(axis=-1, keepdims=True)
         bm = bw - bw.mean(axis=-1, keepdims=True)
-        cov = (am * bm).sum(axis=-1) / (window - 1)
-        out_slice = [slice(None)] * a.ndim
-        out_slice[1] = slice(window - 1, None)
-        out[tuple(out_slice)] = cov
+        out[:, window - 1:] = (am * bm).sum(axis=-1) / (window - 1)
         return out
-    pset.addPrimitive(ts_cov, [np.ndarray, np.ndarray, int], np.ndarray, name="COVIANCE")
 
-    # ts_sma: EMA with alpha = m/n.  SMA(x, n, m) => sma[t] = m/n*x[t] + (1-m/n)*sma[t-1]
+    def ts_regbeta(a: np.ndarray, b: np.ndarray, window: int) -> np.ndarray:
+        """滚动回归系数 β = Cov(A,B) / Var(B)"""
+        n = a.shape[1]
+        out = np.full(a.shape, np.nan, dtype=np.float64)
+        if n < window or window <= 1:
+            return out
+        aw = np.lib.stride_tricks.sliding_window_view(a, window, axis=1)
+        bw = np.lib.stride_tricks.sliding_window_view(b, window, axis=1)
+        am = aw - aw.mean(axis=-1, keepdims=True)
+        bm = bw - bw.mean(axis=-1, keepdims=True)
+        num = (am * bm).sum(axis=-1)
+        den = (bm * bm).sum(axis=-1)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            out[:, window - 1:] = np.where(np.abs(den) > 1e-8, num / den, 0.0)
+        return out
+
+    def ts_regresi(a: np.ndarray, b: np.ndarray, window: int) -> np.ndarray:
+        """滚动回归残差 ε = A - (α + β·B)"""
+        n = a.shape[1]
+        out = np.full(a.shape, np.nan, dtype=np.float64)
+        if n < window or window <= 1:
+            return out
+        aw = np.lib.stride_tricks.sliding_window_view(a, window, axis=1)
+        bw = np.lib.stride_tricks.sliding_window_view(b, window, axis=1)
+        am = aw - aw.mean(axis=-1, keepdims=True)
+        bm = bw - bw.mean(axis=-1, keepdims=True)
+        num = (am * bm).sum(axis=-1)
+        den = (bm * bm).sum(axis=-1)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            beta = np.where(np.abs(den) > 1e-8, num / den, 0.0)
+        alpha = aw.mean(axis=-1) - beta * bw.mean(axis=-1)
+        resid = aw[..., -1] - (alpha + beta * bw[..., -1])
+        out[:, window - 1:] = resid
+        return out
+
+    pset.addPrimitive(ts_corr, [np.ndarray, np.ndarray, int], np.ndarray, name="CORR")
+    pset.addPrimitive(ts_cov, [np.ndarray, np.ndarray, int], np.ndarray, name="COVIANCE")
+    #pset.addPrimitive(ts_regbeta, [np.ndarray, np.ndarray, int], np.ndarray, name="REGBETA")
+    #pset.addPrimitive(ts_regresi, [np.ndarray, np.ndarray, int], np.ndarray, name="REGRESI")
+
+    # ================================================================
+    # 6. 高级时序/形状算子 (5)
+    # ================================================================
+
+    def ts_argmax(arr: np.ndarray, window: int) -> np.ndarray:
+        """距滚动最大值的天数"""
+        n = arr.shape[1]
+        out = np.full(arr.shape, np.nan, dtype=np.float64)
+        if n < window or window <= 0:
+            return out
+        win = np.lib.stride_tricks.sliding_window_view(arr, window, axis=1)
+        out[:, window - 1:] = window - 1 - win.argmax(axis=-1)
+        return out
+
+    def ts_argmin(arr: np.ndarray, window: int) -> np.ndarray:
+        """距滚动最小值的天数"""
+        n = arr.shape[1]
+        out = np.full(arr.shape, np.nan, dtype=np.float64)
+        if n < window or window <= 0:
+            return out
+        win = np.lib.stride_tricks.sliding_window_view(arr, window, axis=1)
+        out[:, window - 1:] = window - 1 - win.argmin(axis=-1)
+        return out
+
+    def ts_signed_power(arr: np.ndarray, exponent: int) -> np.ndarray:
+        """sign(x) * |x|^a (WQ101 专用)"""
+        with np.errstate(over="ignore", invalid="ignore"):
+            return np.sign(arr) * (np.abs(arr) ** exponent)
+
+    pset.addPrimitive(ts_argmax, [np.ndarray, int], np.ndarray, name="TSARGMAX")
+    pset.addPrimitive(ts_argmin, [np.ndarray, int], np.ndarray, name="TSARGMIN")
+    pset.addPrimitive(ts_signed_power, [np.ndarray, int], np.ndarray, name="SIGNED_POWER")
+    pset.addPrimitive(np.sign, [np.ndarray], np.ndarray, name="SIGN")
+    pset.addPrimitive(np.tanh, [np.ndarray], np.ndarray, name="TANH")
+
+    # ================================================================
+    # 7. 二元选择 (2)
+    # ================================================================
+    pset.addPrimitive(np.maximum, [np.ndarray, np.ndarray], np.ndarray, name="MAX2")
+    pset.addPrimitive(np.minimum, [np.ndarray, np.ndarray], np.ndarray, name="MIN2")
+
+    # ================================================================
+    # 8. 技术指标算子 (4)
+    #    True Range + 日内动量 — WQ101 中高频使用
+    # ================================================================
+
+    def ts_tr(high: np.ndarray, low: np.ndarray, close: np.ndarray) -> np.ndarray:
+        """True Range = MAX(H-L, |H-C[-1]|, |L-C[-1]|)"""
+        close_lag1 = ts_delay(close, 1)
+        a = high - low
+        b = np.abs(high - close_lag1)
+        c = np.abs(low - close_lag1)
+        return np.maximum(np.maximum(a, b), c)
+
     def ts_sma(arr: np.ndarray, n: int, m: int) -> np.ndarray:
+        """指数移动平均 (EMA): α=m/n, SMA = α*x + (1-α)*SMA[-1]"""
         if n <= 0:
             n = 1
         alpha = max(0.0, min(1.0, m / n))
@@ -333,332 +418,79 @@ def build_pset(INPUT_COLS) -> gp.PrimitiveSet:
                 else:
                     out[i, t] = alpha * cur + (1.0 - alpha) * prev
         return out
-    pset.addPrimitive(ts_sma, [np.ndarray, int, int], np.ndarray, name="SMA")
 
-    # if_positive: a > 0 ? b : c  (元素级条件)
-    def if_positive(cond: np.ndarray, true_val: np.ndarray, false_val: np.ndarray) -> np.ndarray:
-        return np.where(cond > 0, true_val, false_val)
-    pset.addPrimitive(if_positive, [np.ndarray, np.ndarray, np.ndarray], np.ndarray, name="IF_POS")
+    # DTM/DBM 已移除 — 使用 np.where 条件判断产生 0-or-value 稀疏信号
+    # def ts_dtm(open_, high): return np.where(open_ <= open_lag1, 0.0, max(...))
+    # def ts_dbm(open_, low):   return np.where(open_ >= open_lag1, 0.0, max(...))
 
-    # ts_power: arr ** window (window 作为指数)
-    def ts_power(arr: np.ndarray, exponent: int) -> np.ndarray:
-        with np.errstate(over="ignore", invalid="ignore"):
-            return np.where(np.abs(arr) < 1e6, np.power(arr, exponent), 0.0)
-    pset.addPrimitive(ts_power, [np.ndarray, int], np.ndarray, name="POWER")
-
-    #7. --------------- 一元通用算子 ---------------
-    pset.addPrimitive(np.tanh, [np.ndarray], np.ndarray, name="TANH")
-    pset.addPrimitive(np.negative, [np.ndarray], np.ndarray, name="NEG")
-
-    #8. --------------- 高级时序算子 (补充GTJA191) ---------------
-    # TSARGMAX: days since rolling max (returns 0~window-1)
-    def ts_argmax(arr: np.ndarray, window: int) -> np.ndarray:
-        n = arr.shape[1]
-        out = np.full(arr.shape, np.nan, dtype=np.float64)
-        if n < window or window <= 0:
-            return out
-        win = np.lib.stride_tricks.sliding_window_view(arr, window, axis=1)
-        argmax = window - 1 - win.argmax(axis=-1)
-        out_slice = [slice(None)] * arr.ndim
-        out_slice[1] = slice(window - 1, None)
-        out[tuple(out_slice)] = argmax
-        return out
-    pset.addPrimitive(ts_argmax, [np.ndarray, int], np.ndarray, name="TSARGMAX")
-
-    # TSARGMIN: days since rolling min
-    def ts_argmin(arr: np.ndarray, window: int) -> np.ndarray:
-        n = arr.shape[1]
-        out = np.full(arr.shape, np.nan, dtype=np.float64)
-        if n < window or window <= 0:
-            return out
-        win = np.lib.stride_tricks.sliding_window_view(arr, window, axis=1)
-        argmin = window - 1 - win.argmin(axis=-1)
-        out_slice = [slice(None)] * arr.ndim
-        out_slice[1] = slice(window - 1, None)
-        out[tuple(out_slice)] = argmin
-        return out
-    pset.addPrimitive(ts_argmin, [np.ndarray, int], np.ndarray, name="TSARGMIN")
-
-    # PROD: rolling product
-    def ts_prod(arr: np.ndarray, window: int) -> np.ndarray:
-        n = arr.shape[1]
-        out = np.full(arr.shape, np.nan, dtype=np.float64)
-        if n < window or window <= 0:
-            return out
-        log_arr = np.log(np.maximum(np.abs(arr), 1e-12))
-        s = np.cumsum(log_arr, axis=1)
-        idx_hi = [slice(None)] * arr.ndim; idx_lo = [slice(None)] * arr.ndim
-        idx_hi[1] = slice(window, None); idx_lo[1] = slice(None, -window)
-        out[tuple(idx_hi)] = np.exp(s[tuple(idx_hi)] - s[tuple(idx_lo)])
-        return out
-    pset.addPrimitive(ts_prod, [np.ndarray, int], np.ndarray, name="PROD")
-
-    # SUMAC: cumulative sum (no window argument)
-    def ts_cumsum(arr: np.ndarray) -> np.ndarray:
-        return np.cumsum(np.nan_to_num(arr, nan=0.0), axis=1)
-    pset.addPrimitive(ts_cumsum, [np.ndarray], np.ndarray, name="SUMAC")
-
-    # WMA: weighted MA with ascending weights [1,2,...,n]/sum(1..n)
-    def ts_wma(arr: np.ndarray, window: int) -> np.ndarray:
-        n = arr.shape[1]
-        out = np.full(arr.shape, np.nan, dtype=np.float64)
-        if n < window or window <= 0:
-            return out
-        w = np.arange(1, window + 1, dtype=np.float64)
-        w /= w.sum()
-        win = np.lib.stride_tricks.sliding_window_view(arr, window, axis=1)
-        out_slice = [slice(None)] * arr.ndim
-        out_slice[1] = slice(window - 1, None)
-        out[tuple(out_slice)] = np.tensordot(win, w, axes=([-1], [0]))
-        return out
-    pset.addPrimitive(ts_wma, [np.ndarray, int], np.ndarray, name="WMA")
-
-    # SIGNED_POWER: sign(x) * |x|^a
-    def ts_signed_power(arr: np.ndarray, exponent: int) -> np.ndarray:
-        with np.errstate(over="ignore", invalid="ignore"):
-            return np.sign(arr) * (np.abs(arr) ** exponent)
-    pset.addPrimitive(ts_signed_power, [np.ndarray, int], np.ndarray, name="SIGNED_POWER")
-
-    #9. --------------- 滚动回归算子 ---------------
-    # REGBETA: 滚动回归系数 β = Cov(A,B) / Var(B)
-    def ts_regbeta(a: np.ndarray, b: np.ndarray, window: int) -> np.ndarray:
-        n = a.shape[1]
-        out = np.full(a.shape, np.nan, dtype=np.float64)
-        if n < window or window <= 1:
-            return out
-        aw = np.lib.stride_tricks.sliding_window_view(a, window, axis=1)
-        bw = np.lib.stride_tricks.sliding_window_view(b, window, axis=1)
-        am = aw - aw.mean(axis=-1, keepdims=True)
-        bm = bw - bw.mean(axis=-1, keepdims=True)
-        num = (am * bm).sum(axis=-1)
-        den = (bm * bm).sum(axis=-1)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            beta = np.where(np.abs(den) > 1e-8, num / den, 0.0)
-        out_slice = [slice(None)] * a.ndim
-        out_slice[1] = slice(window - 1, None)
-        out[tuple(out_slice)] = beta
-        return out
-    pset.addPrimitive(ts_regbeta, [np.ndarray, np.ndarray, int], np.ndarray, name="REGBETA")
-
-    # REGRESI: 滚动回归残差 ε = A[t] - (α + β * B[t])
-    def ts_regresi(a: np.ndarray, b: np.ndarray, window: int) -> np.ndarray:
-        n = a.shape[1]
-        out = np.full(a.shape, np.nan, dtype=np.float64)
-        if n < window or window <= 1:
-            return out
-        aw = np.lib.stride_tricks.sliding_window_view(a, window, axis=1)
-        bw = np.lib.stride_tricks.sliding_window_view(b, window, axis=1)
-        am = aw - aw.mean(axis=-1, keepdims=True)
-        bm = bw - bw.mean(axis=-1, keepdims=True)
-        num = (am * bm).sum(axis=-1)
-        den = (bm * bm).sum(axis=-1)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            beta = np.where(np.abs(den) > 1e-8, num / den, 0.0)
-        # α = mean(A) - β * mean(B)
-        alpha = aw.mean(axis=-1) - beta * bw.mean(axis=-1)
-        # 残差 = 当前A - (α + β * 当前B)
-        resid = aw[..., -1] - (alpha + beta * bw[..., -1])
-        out_slice = [slice(None)] * a.ndim
-        out_slice[1] = slice(window - 1, None)
-        out[tuple(out_slice)] = resid
-        return out
-    pset.addPrimitive(ts_regresi, [np.ndarray, np.ndarray, int], np.ndarray, name="REGRESI")
-
-    #10. --------------- 序列生成算子 ---------------
-    # SEQUENCE: 生成 1~n 的等差序列，返回 (1, n) 行向量，可通过 broadcasting 参与运算
-    def ts_sequence(n: int) -> np.ndarray:
-        if n <= 0:
-            n = 1
-        return np.arange(1, n + 1, dtype=np.float64).reshape(1, -1)
-    pset.addPrimitive(ts_sequence, [int], np.ndarray, name="SEQUENCE")
-
-    #11. --------------- 比较算子（条件→0/1掩码, 方案C）---------------
-    def ts_gt(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-        """a > b → 1.0 else 0.0"""
-        with np.errstate(invalid="ignore"):
-            return np.where(a > b, 1.0, 0.0)
-    pset.addPrimitive(ts_gt, [np.ndarray, np.ndarray], np.ndarray, name="GT")
-
-    def ts_lt(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-        """a < b → 1.0 else 0.0"""
-        with np.errstate(invalid="ignore"):
-            return np.where(a < b, 1.0, 0.0)
-    pset.addPrimitive(ts_lt, [np.ndarray, np.ndarray], np.ndarray, name="LT")
-
-    def ts_ge(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-        """a >= b → 1.0 else 0.0"""
-        with np.errstate(invalid="ignore"):
-            return np.where(a >= b, 1.0, 0.0)
-    pset.addPrimitive(ts_ge, [np.ndarray, np.ndarray], np.ndarray, name="GE")
-
-    def ts_le(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-        """a <= b → 1.0 else 0.0"""
-        with np.errstate(invalid="ignore"):
-            return np.where(a <= b, 1.0, 0.0)
-    pset.addPrimitive(ts_le, [np.ndarray, np.ndarray], np.ndarray, name="LE")
-
-    def ts_eq(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-        """|a-b| < 1e-8 → 1.0 else 0.0"""
-        with np.errstate(invalid="ignore"):
-            return np.where(np.abs(a - b) < 1e-8, 1.0, 0.0)
-    pset.addPrimitive(ts_eq, [np.ndarray, np.ndarray], np.ndarray, name="EQ")
-
-    def ts_neq(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-        """|a-b| >= 1e-8 → 1.0 else 0.0"""
-        with np.errstate(invalid="ignore"):
-            return np.where(np.abs(a - b) >= 1e-8, 1.0, 0.0)
-    pset.addPrimitive(ts_neq, [np.ndarray, np.ndarray], np.ndarray, name="NEQ")
-
-    #12. --------------- 条件函数（掩码应用, 方案C）---------------
-    def ts_pos(a: np.ndarray) -> np.ndarray:
-        """保留正值，其余置0"""
-        return np.where(a > 0, a, 0.0)
-    pset.addPrimitive(ts_pos, [np.ndarray], np.ndarray, name="POS")
-
-    def ts_neg(a: np.ndarray) -> np.ndarray:
-        """保留负值，其余置0"""
-        return np.where(a < 0, a, 0.0)
-    pset.addPrimitive(ts_neg, [np.ndarray], np.ndarray, name="NEGVAL")
-
-    def ts_cross(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-        """a 上穿 b (a>b) → 1.0 else 0.0"""
-        with np.errstate(invalid="ignore"):
-            return np.where(a > b, 1.0, 0.0)
-    pset.addPrimitive(ts_cross, [np.ndarray, np.ndarray], np.ndarray, name="CROSS")
-
-    #13. --------------- 热启动：技术指标 DTM/DBM/TR/HD/LD ---------------
-    # DTM = (OPEN <= DELAY(OPEN,1) ? 0 : MAX(HIGH-OPEN, OPEN-DELAY(OPEN,1)))
-    def ts_dtm(open_: np.ndarray, high: np.ndarray) -> np.ndarray:
-        open_lag1 = ts_delay(open_, 1)
-        diff1 = high - open_
-        diff2 = open_ - open_lag1
-        return np.where(open_ <= open_lag1, 0.0, np.maximum(diff1, diff2))
-    pset.addPrimitive(ts_dtm, [np.ndarray, np.ndarray], np.ndarray, name="DTM")
-
-    # DBM = (OPEN >= DELAY(OPEN,1) ? 0 : MAX(OPEN-LOW, OPEN-DELAY(OPEN,1)))
-    def ts_dbm(open_: np.ndarray, low: np.ndarray) -> np.ndarray:
-        open_lag1 = ts_delay(open_, 1)
-        diff1 = open_ - low
-        diff2 = open_ - open_lag1
-        return np.where(open_ >= open_lag1, 0.0, np.maximum(diff1, diff2))
-    pset.addPrimitive(ts_dbm, [np.ndarray, np.ndarray], np.ndarray, name="DBM")
-
-    # TR = MAX(MAX(HIGH-LOW, ABS(HIGH-DELAY(CLOSE,1))), ABS(LOW-DELAY(CLOSE,1)))
-    def ts_tr(high: np.ndarray, low: np.ndarray, close: np.ndarray) -> np.ndarray:
-        close_lag1 = ts_delay(close, 1)
-        a = high - low
-        b = np.abs(high - close_lag1)
-        c = np.abs(low - close_lag1)
-        return np.maximum(np.maximum(a, b), c)
     pset.addPrimitive(ts_tr, [np.ndarray, np.ndarray, np.ndarray], np.ndarray, name="TR")
+    pset.addPrimitive(ts_sma, [np.ndarray, int, int], np.ndarray, name="SMA")
+    # pset.addPrimitive(ts_dtm, [np.ndarray, np.ndarray], np.ndarray, name="DTM")
+    # pset.addPrimitive(ts_dbm, [np.ndarray, np.ndarray], np.ndarray, name="DBM")
 
-    # HD = HIGH - DELAY(HIGH, 1)
-    def ts_hd(high: np.ndarray) -> np.ndarray:
-        return ts_delta(high, 1)
-    pset.addPrimitive(ts_hd, [np.ndarray], np.ndarray, name="HD")
-
-    # LD = DELAY(LOW, 1) - LOW
-    def ts_ld(low: np.ndarray) -> np.ndarray:
-        return -ts_delta(low, 1)
-    pset.addPrimitive(ts_ld, [np.ndarray], np.ndarray, name="LD")
-
-    #14. --------------- SELF: 表达式自身 t-1 值（递归自引用）---------------
-    def ts_self(arr: np.ndarray) -> np.ndarray:
-        """返回表达式在 t-1 时刻的值，首次评估返回 NaN"""
-        if _self_cache is not None:
-            return _self_cache
-        return np.full(arr.shape, np.nan, dtype=np.float64)
-    pset.addPrimitive(ts_self, [np.ndarray], np.ndarray, name="SELF")
-
+    # ================================================================
+    # 完成
+    # ================================================================
     return pset
 
 
-# ---- SELF 缓存接口 ----
-_self_cache = None
+# ================================================================
+# 安全生成函数 (类型安全回退)
+# ================================================================
 
-def set_self_cache(value: np.ndarray):
-    """在每轮评估前设置 SELF 的滞后值（通常为上一轮因子值的 DELAY(1)）"""
-    global _self_cache
-    _self_cache = value
-
-def clear_self_cache():
-    global _self_cache
-    _self_cache = None
-
-
-# ---- 安全生成函数：当类型没有 primitives 时自动回退到 terminals ----
-
-import sys as _sys
-
-def genGrowSafe(pset, min_, max_, type_=None):
-    """genGrow 的安全版本：当某类型在 primitives 字典中无条目时，
-    自动从 terminals 中选取，避免 IndexError。"""
-    import random as _random
-
+def genFullSafe(pset, min_, max_, type_=None):
+    """genFull 安全版: 某类型无 primitives 时自动从 terminals 选取"""
     def condition(height, depth):
-        return depth == height or \
-            (depth >= min_ and _random.random() < pset.terminalRatio)
-
+        return depth == height
     return _generate_safe(pset, min_, max_, condition, type_)
 
 
-def genFullSafe(pset, min_, max_, type_=None):
-    """genFull 的安全版本：当某类型在 primitives 字典中无条目时，
-    自动从 terminals 中选取，避免 IndexError。"""
-
+def genGrowSafe(pset, min_, max_, type_=None):
+    """genGrow 安全版"""
     def condition(height, depth):
-        return depth == height
-
+        return depth == height or \
+            (depth >= min_ and random.random() < pset.terminalRatio)
     return _generate_safe(pset, min_, max_, condition, type_)
 
 
 def genHalfAndHalfSafe(pset, min_, max_, type_=None):
-    """genHalfAndHalf 的安全版本。"""
-    import random as _random
-    method = _random.choice((genGrowSafe, genFullSafe))
+    """genHalfAndHalf 安全版"""
+    method = random.choice((genGrowSafe, genFullSafe))
     return method(pset, min_, max_, type_)
 
 
-def _generate_safe(pset, min_, max_, condition, type_=None):
-    """generate() 的安全变体：当 primitives[type_] 为空时回退到 terminals。
+import sys as _sys
 
-    这是对 deap.gp.generate 的微小修改，仅添加了一个条件：
-        condition(...) or not pset.primitives[type_]
-    确保纯叶子类型（如 int）在非终端条件触发时也能正常生成。
-    """
-    import random as _random
+
+def _generate_safe(pset, min_, max_, condition, type_=None):
+    """generate() 安全变体: primitives[type_] 为空时回退到 terminals"""
     from deap.gp import MetaEphemeral
 
     if type_ is None:
         type_ = pset.ret
     expr = []
-    height = _random.randint(min_, max_)
+    height = random.randint(min_, max_)
     stack = [(0, type_)]
     while len(stack) != 0:
         depth, type_ = stack.pop()
-        # 关键修改：primitives[type_] 为空 → 强制走 terminal
         if condition(height, depth) or not pset.primitives[type_]:
             try:
-                term = _random.choice(pset.terminals[type_])
+                term = random.choice(pset.terminals[type_])
             except IndexError:
                 _, _, traceback = _sys.exc_info()
                 raise IndexError(
-                    "The gp.generate function tried to add "
-                    "a terminal of type '%s', but there is "
-                    "none available." % (type_,)
+                    "gp.generate: no terminal of type '%s' available." % (type_,)
                 ).with_traceback(traceback)
-            if type(term) is MetaEphemeral:
+            if isinstance(term, MetaEphemeral):
                 term = term()
             expr.append(term)
         else:
             try:
-                prim = _random.choice(pset.primitives[type_])
+                prim = random.choice(pset.primitives[type_])
             except IndexError:
                 _, _, traceback = _sys.exc_info()
                 raise IndexError(
-                    "The gp.generate function tried to add "
-                    "a primitive of type '%s', but there is "
-                    "none available." % (type_,)
+                    "gp.generate: no primitive of type '%s' available." % (type_,)
                 ).with_traceback(traceback)
             expr.append(prim)
             for arg in reversed(prim.args):

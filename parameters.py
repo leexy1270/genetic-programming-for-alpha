@@ -1,5 +1,34 @@
 ###参数设置
+# ---- 数据源选择 ----
+DATA_SOURCE = "futures"    # "stock"=A股中证500 | "futures"=期货主流合约
 
+USED_CORES = 12
+
+MAX_TREE_HEIGHT = 5        # 初始种群的最大树高 
+
+POPULATION_SIZE = 600       # 种群大小
+N_GENERATIONS   = 80        # 进化代数 
+N_RUNS          = 1         # 独立 run 次数
+
+TOURNAMENT_SIZE = 4         # 锦标赛选择大小
+CROSSOVER_PROB  = 0.60      # 交叉概率
+MUTATION_PROB   = 0.45      # 变异概率
+
+# ---- 趋同惩罚 (防早熟收敛) ----
+IMMIGRANT_RATE       = 0.05   # 每代随机移民比例 (替换最差个体)
+DIVERSITY_THRESHOLD  = 0.25   # 唯一表达式占比 < 此值 → 紧急模式
+HEAVY_MUTATION_PROB  = 0.20   # 强变异概率 (更大子树替换, 打破僵局)
+HEAVY_MUTATION_DEPTH = 5      # 强变异子树最大深度
+
+MAX_WINDOW      = 252        # 时序算子的最大窗口（天数）
+MIN_STOCKS      = 8         # 截面最少有效样本
+MIN_DAYS        = 60        # 最少需要多少个交易日
+FORWARD_RETURN  = 5         # 未来 N 日收益率作为预测目标
+PARSIMONY_C     = 3e-5     # 复杂度惩罚 (IC²量级: IC=0.05→50节点≈60%惩罚→促简洁)
+
+# ---- 热启动设置 ----
+WARM_START      = True
+WARM_START_FILE = "warm_start.txt"  # 热启动因子文件 
 # 科创50 成分股 (2025年12月调整后, 共50只)
 KC50_LIST = [
     # ---- 电子 (27只) ----
@@ -114,24 +143,23 @@ ZZ500_LIST = [
     "688563.SH",    "688568.SH",    "688578.SH",    "688582.SH",    "688599.SH",   "688608.SH",    "688615.SH",    "688617.SH",    "688629.SH",    "688676.SH",
     "688692.SH",    "688702.SH",    "688708.SH",    "688709.SH",    "688728.SH",    "688772.SH",    "688777.SH",    "688778.SH",    "688819.SH",    "689009.SH"]
 
+# ---- 期货主流合约列表 (29个品种) ----
+FUTURES_LIST = [
+    # 上期所 SHFE (10)
+    "CU", "AL", "ZN", "PB", "NI", "SN", "AG", "AU", "SP", "RB",
+    # 中金所 CFFEX (3)
+    "IF", "IC", "IH",
+    # 大商所 DCE (6)
+    "A", "B", "C", "CS", "P", "M",
+    # 郑商所 CZCE (10)
+    "AP", "CF", "CJ", "MA", "RM", "SA", "SR", "TA", "UR", "ZC",
+]
 
-MAX_TREE_HEIGHT = 10        # 初始种群的最大树高
-
-POPULATION_SIZE = 500       # 种群大小
-N_GENERATIONS   = 40        # 进化代数
-
-TOURNAMENT_SIZE = 5         # 锦标赛选择大小
-CROSSOVER_PROB  = 0.7       # 交叉概率
-MUTATION_PROB   = 0.25      # 变异概率
-
-MAX_WINDOW      = 252        # 时序算子的最大窗口（天数）
-MIN_STOCKS      = 20        # 最少需要多少只股票用于截面评估
-MIN_DAYS        = 60        # 最少需要多少个交易日
-FORWARD_RETURN  = 5         # 未来 N 日收益率作为预测目标
-PARSIMONY_C     = 1e-4     # 复杂度惩罚系数（防膨胀 bloat control）
-
-# ---- 热启动设置 ----
-WARM_START      = True      # 是否从文件加载因子表达式作为初始种群种子
-WARM_START_FILE = "gtja191_factors.txt"  # 因子表达式文件（每行一个DEAP表达式）
-
+# ---- 期货特征列 ----
+# 与股票不同: 无 VWAP/VWAP_DEV, 但有 OPENINTEREST(持仓量) 和 OI_CHG(持仓变化)
+FUTURES_FEATURE_COLS = [
+    'OPEN', 'HIGH', 'LOW', 'CLOSE', 'RETURN', 'VOLUME', 'OPENINTEREST',
+    'BODY', 'UPPER_SHADOW', 'LOWER_SHADOW', 'PRICE_POS', 'AMP', 'GAP',
+    'VOL_CHG', 'OI_CHG',
+]
 
